@@ -283,6 +283,7 @@ renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
+window.scene = scene;
 scene.background = new THREE.Color(0x0e1116);
 
 if (TEXTURED) {
@@ -293,7 +294,8 @@ if (TEXTURED) {
   scene.background = new THREE.Color(0x87a6c4);
 }
 
-const camera = new THREE.PerspectiveCamera(
+window.camera = null; // set below; exposed for debugging
+const camera = window.camera = new THREE.PerspectiveCamera(
   90,
   window.innerWidth / window.innerHeight,
   0.02,
@@ -314,7 +316,7 @@ const EDGE_MATERIAL = new THREE.LineBasicMaterial({
   opacity: 0.35,
 });
 
-const EDGE_TRIANGLE_LIMIT = 500000;
+const EDGE_TRIANGLE_LIMIT = 2000000;
 
 // ---------------------------------------------------------------------
 // movement constants (source units, CS2 defaults)
@@ -523,8 +525,9 @@ fetch(`/export/maps/${mapName}/entities.json`)
   .then((entities) => {
     const spawn = entities.find((e) => e.classname === "info_player_terrorist");
     if (spawn && spawn.origin) {
+      // +16u so a spawn point that clips a prop drops in instead of wedging
       SPAWN_GLTF_SRC_UNITS = srcToGltf(
-        new THREE.Vector3(spawn.origin[0], spawn.origin[1], spawn.origin[2])
+        new THREE.Vector3(spawn.origin[0], spawn.origin[1], spawn.origin[2] + 16)
       );
       const yawDeg = (spawn.angles && spawn.angles[1]) || 0;
       spawnYaw = (yawDeg * Math.PI) / 180;
@@ -617,6 +620,18 @@ if (TEXTURED) {
         // match only true surface decals; crate materials are named
         // "..._painted_decals" and must NOT be caught
         const isDecal = /^(hr_dust_(overlay|decal)_|dust_mudbrick_transition_overlay|bombsite_)/i.test(m.name || "");
+        // water shaders don't survive the export and render as opaque white
+        // sheets -> flat translucent water instead
+        if (/water|puddle/i.test(m.name || "")) {
+          const w = new THREE.MeshBasicMaterial({
+            color: 0x2e5d6e,
+            transparent: true,
+            opacity: 0.55,
+            depthWrite: false,
+          });
+          unlitCache.set(m, w);
+          return w;
+        }
         const u = new THREE.MeshBasicMaterial({
           map: m.map || null,
           color: m.map ? 0xffffff : (m.color || 0xffffff),
