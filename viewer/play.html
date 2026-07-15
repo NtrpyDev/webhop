@@ -248,12 +248,11 @@ const overlay = document.getElementById("overlay");
 const speedBig = document.getElementById("speed-big");
 const params = new URLSearchParams(location.search);
 const mapName = params.get("map") || "de_dust2";
-const TEXTURED = params.get("render") === "textured" && mapName === "de_dust2";
+const TEXTURED = params.get("render") === "textured";
 const ARMS = params.get("arms") === "1";
 const PHYSICS_GLB_URL = `/export/maps/${mapName}/world_physics_physics.glb`;
-const glbUrl = TEXTURED
-  ? "/export-textured/maps/de_dust2/world.glb"
-  : params.get("glb") || PHYSICS_GLB_URL;
+const TEXTURED_GLB_URL = `/export-textured/maps/${mapName}/world.glb`;
+const glbUrl = TEXTURED ? TEXTURED_GLB_URL : params.get("glb") || PHYSICS_GLB_URL;
 const S = 0.0254; // source units -> meters
 
 function setError(message) {
@@ -649,7 +648,10 @@ if (TEXTURED) {
       }
     },
     (err) => {
-      setError(err.message || String(err));
+      // no textured export for this map yet -> fall back to wireframe
+      const p = new URLSearchParams(location.search);
+      p.delete("render");
+      location.search = p.toString();
     }
   );
 
