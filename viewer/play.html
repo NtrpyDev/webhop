@@ -144,6 +144,71 @@
     background: #3fa9f5;
     box-shadow: 0 0 4px rgba(63, 169, 245, 0.8);
   }
+  #maps-btn {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    font-weight: 700;
+    color: #8aa0b8;
+    background: rgba(20, 30, 42, 0.75);
+    border: 1px solid #2c3e52;
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+    z-index: 30;
+    transition: border-color 60ms, color 60ms;
+  }
+  #maps-btn:hover {
+    border-color: #3fa9f5;
+    color: #3fa9f5;
+  }
+  #map-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 14, 19, 0.92);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 40;
+  }
+  #map-overlay.open {
+    display: flex;
+  }
+  #map-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 170px);
+    gap: 10px;
+    max-width: 920px;
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 20px;
+  }
+  .map-tile {
+    padding: 14px 10px;
+    text-align: center;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 13px;
+    font-weight: 700;
+    color: #8aa0b8;
+    background: rgba(20, 30, 42, 0.75);
+    border: 1px solid #2c3e52;
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 60ms, color 60ms;
+  }
+  .map-tile:hover {
+    border-color: #3fa9f5;
+    color: #3fa9f5;
+  }
+  .map-tile.current {
+    border-color: #3fa9f5;
+    color: #3fa9f5;
+    background: rgba(63, 169, 245, 0.12);
+  }
 </style>
 <script type="importmap">
 {
@@ -166,7 +231,9 @@
   </div>
 </div>
 <div id="speed-big">0<span class="unit">u/s</span></div>
-<div id="hint">click to play &middot; WASD move &middot; space/wheel jump/bhop &middot; T third person &middot; V noclip &middot; R reset</div>
+<div id="hint">click to play &middot; WASD move &middot; space/wheel jump/bhop &middot; T third person &middot; V noclip &middot; R reset &middot; M maps</div>
+<div id="maps-btn">MAPS</div>
+<div id="map-overlay"><div id="map-grid"></div></div>
 <script type="module">
 import * as THREE from "three";
 import { GLTFLoader } from "./lib/GLTFLoader.js";
@@ -180,13 +247,13 @@ THREE.Mesh.prototype.raycast = acceleratedRaycast;
 const overlay = document.getElementById("overlay");
 const speedBig = document.getElementById("speed-big");
 const params = new URLSearchParams(location.search);
-const TEXTURED = params.get("render") === "textured";
+const mapName = params.get("map") || "de_dust2";
+const TEXTURED = params.get("render") === "textured" && mapName === "de_dust2";
 const ARMS = params.get("arms") === "1";
-const PHYSICS_GLB_URL = "/export/maps/de_dust2/world_physics_physics.glb";
+const PHYSICS_GLB_URL = `/export/maps/${mapName}/world_physics_physics.glb`;
 const glbUrl = TEXTURED
   ? "/export-textured/maps/de_dust2/world.glb"
   : params.get("glb") || PHYSICS_GLB_URL;
-const mapName = glbUrl.split("/").pop().replace(/\.glb$/i, "");
 const S = 0.0254; // source units -> meters
 
 function setError(message) {
@@ -257,15 +324,18 @@ const PLAYER_RADIUS = 16;
 const PLAYER_HEIGHT = 72;
 const EYE_HEIGHT = 64;
 
-const TICK_RATE = 64;
+const TICK_RATE = parseInt(params.get("tick") || "128", 10) || 128;
 const TICK_DT = 1 / TICK_RATE;
 
 // T spawn, source units -> gltf mapping (x,y,z) -> (y, z, x) [still source units here]
-const SPAWN_SRC = { x: -822, y: -795, z: 150 };
+// dust2 fallback, used if the per-map entities.json fetch fails
+const DUST2_SPAWN_SRC = { x: -822, y: -795, z: 150 };
 function srcToGltf(v) {
   return new THREE.Vector3(v.y, v.z, v.x);
 }
-const SPAWN_GLTF_SRC_UNITS = srcToGltf(SPAWN_SRC); // still in source units, gltf axis order
+let SPAWN_GLTF_SRC_UNITS = srcToGltf(DUST2_SPAWN_SRC); // still in source units, gltf axis order
+let spawnYaw = 0;
+let spawnFetchDone = false;
 
 // player state, all in SOURCE UNITS, gltf axis order (matches scaled collision mesh)
 const player = {
@@ -306,6 +376,7 @@ document.addEventListener("mousemove", (e) => {
 });
 
 window.addEventListener("keydown", (e) => {
+  if (mapOverlayOpen) return;
   keys.add(e.code);
   if (e.code === "BracketLeft" || e.code === "BracketRight") {
     sens = Math.round(Math.max(0.1, Math.min(10, sens + (e.code === "BracketRight" ? 0.1 : -0.1))) * 100) / 100;
@@ -319,11 +390,67 @@ window.addEventListener("keydown", (e) => {
     player.pos.copy(SPAWN_GLTF_SRC_UNITS);
     prevTickPos.copy(SPAWN_GLTF_SRC_UNITS);
     player.vel.set(0, 0, 0);
-    yaw = 0;
+    yaw = spawnYaw;
     pitch = 0;
   }
 });
 window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+// ---------------------------------------------------------------------
+// map selector overlay (M or MAPS button)
+// ---------------------------------------------------------------------
+
+const MAP_LIST = [
+  "ar_baggage", "ar_pool_day", "ar_shoots", "ar_shoots_night",
+  "cs_italy", "cs_office", "cs_shelter",
+  "de_ancient", "de_ancient_night", "de_anubis", "de_boulder", "de_cache",
+  "de_debris", "de_dust2", "de_eldorado", "de_fachwerk", "de_inferno",
+  "de_mirage", "de_nuke", "de_overpass", "de_poseidon", "de_train", "de_vertigo",
+];
+
+let mapOverlayOpen = false;
+const mapOverlayEl = document.getElementById("map-overlay");
+const mapsBtn = document.getElementById("maps-btn");
+const mapGridEl = document.getElementById("map-grid");
+
+function navigateToMap(name) {
+  const newParams = new URLSearchParams(location.search);
+  newParams.set("map", name);
+  location.search = newParams.toString();
+}
+
+for (const name of MAP_LIST) {
+  const tile = document.createElement("div");
+  tile.className = "map-tile" + (name === mapName ? " current" : "");
+  tile.textContent = name;
+  tile.addEventListener("click", () => navigateToMap(name));
+  mapGridEl.appendChild(tile);
+}
+
+function openMapOverlay() {
+  mapOverlayOpen = true;
+  mapOverlayEl.classList.add("open");
+  if (pointerLocked) document.exitPointerLock();
+}
+function closeMapOverlay() {
+  mapOverlayOpen = false;
+  mapOverlayEl.classList.remove("open");
+}
+function toggleMapOverlay() {
+  if (mapOverlayOpen) closeMapOverlay();
+  else openMapOverlay();
+}
+mapsBtn.addEventListener("click", toggleMapOverlay);
+window.addEventListener("keydown", (e) => {
+  if (e.code === "KeyM") {
+    toggleMapOverlay();
+    return;
+  }
+  if (e.code === "Escape" && mapOverlayOpen) {
+    closeMapOverlay();
+    return;
+  }
+});
 
 // scroll wheel = jump (CS style): each notch buffers a +jump for a short window
 let jumpBufferedAt = -Infinity;
@@ -366,7 +493,42 @@ const startTime = performance.now();
 let triangleCount = 0;
 let collisionBvh = null;
 let loaded = false;
+let geometryLoaded = false;
 let fps = 0;
+
+function maybeSetLoaded() {
+  if (geometryLoaded && spawnFetchDone) loaded = true;
+}
+
+// per-map spawn: fetch entities.json for the first info_player_terrorist.
+// Must resolve (success or failure) before the sim starts ticking, so we
+// never spawn at the dust2 fallback coords inside a different map's void.
+fetch(`/export/maps/${mapName}/entities.json`)
+  .then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  })
+  .then((entities) => {
+    const spawn = entities.find((e) => e.classname === "info_player_terrorist");
+    if (spawn && spawn.origin) {
+      SPAWN_GLTF_SRC_UNITS = srcToGltf(
+        new THREE.Vector3(spawn.origin[0], spawn.origin[1], spawn.origin[2])
+      );
+      const yawDeg = (spawn.angles && spawn.angles[1]) || 0;
+      spawnYaw = (yawDeg * Math.PI) / 180;
+    }
+  })
+  .catch((err) => {
+    console.warn(`spawn fetch failed for ${mapName}, using dust2 fallback`, err);
+  })
+  .finally(() => {
+    player.pos.copy(SPAWN_GLTF_SRC_UNITS);
+    prevTickPos.copy(SPAWN_GLTF_SRC_UNITS);
+    renderPos.copy(SPAWN_GLTF_SRC_UNITS);
+    yaw = spawnYaw;
+    spawnFetchDone = true;
+    maybeSetLoaded();
+  });
 
 // build collision geometry (position-only, world space, meters) from any
 // loaded gltf root, excluding clip brushes / physics-sky. Shared by both
@@ -421,7 +583,8 @@ if (TEXTURED) {
   function maybeFinishLoad() {
     if (!visualReady || !collisionReady) return;
     const loadMs = Math.round(performance.now() - startTime);
-    loaded = true;
+    geometryLoaded = true;
+    maybeSetLoaded();
     console.log(`map loaded (textured): ${Math.round(triangleCount)} tris, ${loadMs}ms`);
   }
 
@@ -572,7 +735,8 @@ if (TEXTURED) {
       }
 
       const loadMs = Math.round(performance.now() - startTime);
-      loaded = true;
+      geometryLoaded = true;
+      maybeSetLoaded();
       console.log(`map loaded: ${Math.round(triangleCount)} tris, ${loadMs}ms`);
     },
     undefined,
@@ -888,7 +1052,7 @@ renderer.setAnimationLoop(() => {
   if (loaded) {
     accumulator += frameDt;
     let ticks = 0;
-    while (accumulator >= TICK_DT && ticks < 8) {
+    while (accumulator >= TICK_DT && ticks < 16) {
       tick(TICK_DT);
       accumulator -= TICK_DT;
       ticks++;
