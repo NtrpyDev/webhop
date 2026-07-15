@@ -231,7 +231,7 @@
   </div>
 </div>
 <div id="speed-big">0<span class="unit">u/s</span></div>
-<div id="hint">click to play &middot; WASD move &middot; space/wheel jump/bhop &middot; T third person &middot; V noclip &middot; R reset &middot; M maps</div>
+<div id="hint">click to play &middot; WASD move &middot; space/wheel jump/bhop &middot; T third person &middot; V noclip &middot; R reset &middot; M maps &middot; G graphics</div>
 <div id="maps-btn">MAPS</div>
 <div id="map-overlay"><div id="map-grid"></div></div>
 <script type="module">
@@ -248,7 +248,10 @@ const overlay = document.getElementById("overlay");
 const speedBig = document.getElementById("speed-big");
 const params = new URLSearchParams(location.search);
 const mapName = params.get("map") || "de_dust2";
-const TEXTURED = params.get("render") === "textured";
+// render mode: URL param wins, otherwise last choice (G toggles it in-game)
+const renderPref = params.get("render") || localStorage.getItem("cs2lab_render") || "wire";
+const TEXTURED = renderPref === "textured";
+localStorage.setItem("cs2lab_render", TEXTURED ? "textured" : "wire");
 const ARMS = params.get("arms") === "1";
 const PHYSICS_GLB_URL = `/export/maps/${mapName}/world_physics_physics.glb`;
 const TEXTURED_GLB_URL = `/export-textured/maps/${mapName}/world.glb`;
@@ -257,6 +260,14 @@ const S = 0.0254; // source units -> meters
 
 function setError(message) {
   overlay.innerHTML = `<span class="err">error loading ${mapName}\n${message}</span>`;
+}
+
+function reloadWithoutRenderParam() {
+  const p = new URLSearchParams(location.search);
+  p.delete("render");
+  const next = p.toString();
+  if (next === location.search.replace(/^\?/, "")) location.reload();
+  else location.search = next;
 }
 
 // ---------------------------------------------------------------------
@@ -384,6 +395,10 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "KeyV") {
     player.noclip = !player.noclip;
     if (player.noclip) player.vel.set(0, 0, 0);
+  }
+  if (e.code === "KeyG") {
+    localStorage.setItem("cs2lab_render", TEXTURED ? "wire" : "textured");
+    reloadWithoutRenderParam();
   }
   if (e.code === "KeyR") {
     player.pos.copy(SPAWN_GLTF_SRC_UNITS);
@@ -649,9 +664,8 @@ if (TEXTURED) {
     },
     (err) => {
       // no textured export for this map yet -> fall back to wireframe
-      const p = new URLSearchParams(location.search);
-      p.delete("render");
-      location.search = p.toString();
+      localStorage.setItem("cs2lab_render", "wire");
+      reloadWithoutRenderParam();
     }
   );
 
