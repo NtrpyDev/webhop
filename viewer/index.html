@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>cs2-map-lab viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1116; overflow: hidden; }
+  canvas { display: block; }
+  #overlay {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #8aa0b8;
+    background: rgba(14, 17, 22, 0.55);
+    padding: 8px 12px;
+    border-radius: 4px;
+    pointer-events: none;
+    white-space: pre;
+    user-select: none;
+  }
+  #overlay .err { color: #e8607a; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./lib/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="overlay">loading...</div>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "./lib/OrbitControls.js";
+import { GLTFLoader } from "./lib/GLTFLoader.js";
+
+const overlay = document.getElementById("overlay");
+const params = new URLSearchParams(location.search);
+const glbUrl = params.get("glb") || "/export/maps/de_dust2/world_physics_physics.glb";
+const mapName = glbUrl.split("/").pop().replace(/\.glb$/i, "");
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: "low-power",
+});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+window.scene = scene;
+scene.background = new THREE.Color(0x0e1116);
+
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  100000
+);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+
+const grid = new THREE.GridHelper(4000, 40, 0x1c2733, 0x1c2733);
+grid.visible = false;
+scene.add(grid);
+
+const HOLO_FILL = new THREE.MeshBasicMaterial({
+  color: 0x1c2733,
+  wireframe: false,
+  polygonOffset: true,
+  polygonOffsetFactor: 1,
+  polygonOffsetUnits: 1,
+});
+
+const EDGE_MATERIAL = new THREE.LineBasicMaterial({
+  color: 0x3fa9f5,
+  transparent: true,
+  opacity: 0.35,
+});
+
+const EDGE_TRIANGLE_LIMIT = 500000;
+
+function setOverlay(lines) {
+  overlay.textContent = lines.join("\n");
+}
+
+function setError(message) {
+  overlay.innerHTML = `<span class="err">error loading ${mapName}\n${message}</span>`;
+}
+
+function fitCameraToObject(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+
+  object.position.sub(center);
+
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const fitDistance = maxDim / (2 * Math.tan((Math.PI * camera.fov) / 360));
+  const dir = new THREE.Vector3(1, 0.9, 1).normalize();
+
+  camera.position.copy(dir.multiplyScalar(fitDistance * 1.4));
+  camera.near = fitDistance / 100;
+  camera.far = fitDistance * 100;
+  camera.updateProjectionMatrix();
+
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+const startTime = performance.now();
+let triangleCount = 0;
+
+new GLTFLoader().load(
+  glbUrl,
+  (gltf) => {
+    const root = gltf.scene;
+
+    root.traverse((child) => {
+      if (!child.isMesh) return;
+
+      const geometry = child.geometry;
+      const positionCount = geometry.getAttribute("position")?.count || 0;
+      const triCount = geometry.index ? geometry.index.count / 3 : positionCount / 3;
+      triangleCount += triCount;
+
+      child.material = HOLO_FILL;
+
+      if (triCount <= EDGE_TRIANGLE_LIMIT) {
+        const edges = new THREE.EdgesGeometry(geometry, 30);
+        const lines = new THREE.LineSegments(edges, EDGE_MATERIAL);
+        child.add(lines);
+      }
+    });
+
+    fetch("/export/maps/de_dust2/entities.json")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((ents) => {
+        const COLORS = {
+          info_player_terrorist: 0xf5a53f,
+          info_player_counterterrorist: 0x3fa9f5,
+          func_bomb_target: 0xf53f5b,
+        };
+        const S = 0.0254;
+        for (const e of ents) {
+          const [x, y, z] = e.origin;
+          if (!x && !y && !z) continue;
+          const isSite = e.classname === "func_bomb_target";
+          const mesh = new THREE.Mesh(
+            isSite
+              ? new THREE.OctahedronGeometry(2.5)
+              : new THREE.SphereGeometry(1, 12, 8),
+            new THREE.MeshBasicMaterial({ color: COLORS[e.classname] || 0xffffff, depthTest: false })
+          );
+          mesh.renderOrder = 999;
+          mesh.position.set(y * S, z * S + 0.9, x * S);
+          root.add(mesh);
+        }
+      })
+      .catch(() => {});
+
+    root.traverse((child) => {
+      if (child.isMesh && /clip/i.test(child.name)) child.visible = false;
+    });
+
+    scene.add(root);
+    fitCameraToObject(root);
+    scene.updateMatrixWorld(true);
+
+    const envelope = new THREE.Box3();
+    let biggest = null, biggestVol = 0;
+    const boxes = [];
+    root.traverse((child) => {
+      if (!child.isMesh || !child.visible || child.geometry.type !== "BufferGeometry") return;
+      const box = new THREE.Box3().setFromObject(child);
+      const s = box.getSize(new THREE.Vector3());
+      const vol = s.x * s.y * s.z;
+      boxes.push([child, box, vol]);
+      if (vol > biggestVol) { biggestVol = vol; biggest = child; }
+    });
+    for (const [child, box] of boxes) if (child !== biggest) envelope.union(box);
+
+    if (!envelope.isEmpty()) {
+      envelope.expandByVector(envelope.getSize(new THREE.Vector3()).multiplyScalar(0.03));
+      const planes = [
+        new THREE.Plane(new THREE.Vector3(1, 0, 0), -envelope.min.x),
+        new THREE.Plane(new THREE.Vector3(-1, 0, 0), envelope.max.x),
+        new THREE.Plane(new THREE.Vector3(0, 1, 0), -envelope.min.y),
+        new THREE.Plane(new THREE.Vector3(0, -1, 0), envelope.max.y),
+        new THREE.Plane(new THREE.Vector3(0, 0, 1), -envelope.min.z),
+        new THREE.Plane(new THREE.Vector3(0, 0, -1), envelope.max.z),
+      ];
+      renderer.localClippingEnabled = true;
+      HOLO_FILL.clippingPlanes = planes;
+      EDGE_MATERIAL.clippingPlanes = planes;
+    }
+
+    const loadMs = Math.round(performance.now() - startTime);
+    setOverlay([
+      `map: ${mapName}`,
+      `triangles: ${Math.round(triangleCount).toLocaleString()}`,
+      `load: ${loadMs}ms`,
+      `LMB drag: rotate  RMB drag: pan  scroll: zoom`,
+    ]);
+  },
+  undefined,
+  (err) => {
+    setError(err.message || String(err));
+  }
+);
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
