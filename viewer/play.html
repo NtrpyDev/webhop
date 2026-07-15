@@ -1,0 +1,973 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>cs2-map-lab play</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0e1116; overflow: hidden; }
+  canvas { display: block; }
+  #overlay {
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #8aa0b8;
+    background: rgba(14, 17, 22, 0.55);
+    padding: 8px 12px;
+    border-radius: 4px;
+    pointer-events: none;
+    white-space: pre;
+    user-select: none;
+  }
+  #overlay .err { color: #e8607a; }
+  #speed-big {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 42px;
+    font-weight: 700;
+    color: #3fa9f5;
+    text-shadow: 0 0 12px rgba(63, 169, 245, 0.5);
+    pointer-events: none;
+    user-select: none;
+  }
+  #speed-big .unit {
+    font-size: 16px;
+    color: #8aa0b8;
+    margin-left: 6px;
+  }
+  #crosshair {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 4px;
+    height: 4px;
+    margin: -2px 0 0 -2px;
+    border-radius: 50%;
+    background: #3fa9f5;
+    box-shadow: 0 0 4px rgba(63, 169, 245, 0.8);
+    pointer-events: none;
+  }
+  #hint {
+    position: fixed;
+    bottom: 90px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 12px;
+    color: #8aa0b8;
+    pointer-events: none;
+    user-select: none;
+    opacity: 0.8;
+  }
+  #inputs {
+    position: fixed;
+    right: 28px;
+    bottom: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+    user-select: none;
+  }
+  .krow {
+    display: flex;
+    gap: 6px;
+    justify-content: center;
+  }
+  .key {
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+    font-size: 15px;
+    font-weight: 700;
+    color: #8aa0b8;
+    background: rgba(20, 30, 42, 0.75);
+    border: 1px solid #2c3e52;
+    border-radius: 6px;
+    transition: background 60ms, color 60ms, border-color 60ms;
+  }
+  .key.wide { width: 144px; }
+  .key.scroll {
+    width: 69px;
+    flex-direction: column;
+    gap: 2px;
+    line-height: 1;
+  }
+  .key.scroll small {
+    font-size: 8px;
+    letter-spacing: 1px;
+    font-weight: 400;
+  }
+  .key.on {
+    background: #3fa9f5;
+    border-color: #7ec8ff;
+    color: #0b1016;
+  }
+  #mouse-pad {
+    width: 69px;
+    height: 69px;
+    border-radius: 50%;
+    background: rgba(20, 30, 42, 0.75);
+    border: 1px solid #2c3e52;
+    position: relative;
+  }
+  #mouse-pad small {
+    position: absolute;
+    bottom: 6px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 8px;
+    letter-spacing: 1px;
+    font-weight: 400;
+    color: #8aa0b8;
+    font-family: "SF Mono", "JetBrains Mono", Consolas, monospace;
+  }
+  #mouse-dot {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    margin: -5px 0 0 -5px;
+    border-radius: 50%;
+    background: #8aa0b8;
+  }
+  #mouse-dot.on {
+    background: #3fa9f5;
+    box-shadow: 0 0 4px rgba(63, 169, 245, 0.8);
+  }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./lib/three.module.js"
+  }
+}
+</script>
+</head>
+<body>
+<div id="overlay">loading...</div>
+<div id="crosshair"></div>
+<div id="inputs">
+  <div class="krow"><div id="mouse-pad"><div id="mouse-dot"></div><small>MOUSE</small></div></div>
+  <div class="krow"><span class="key" id="k-w">W</span></div>
+  <div class="krow"><span class="key" id="k-a">A</span><span class="key" id="k-s">S</span><span class="key" id="k-d">D</span></div>
+  <div class="krow">
+    <span class="key scroll" id="k-wheelup">&#9650;<small>SCROLL</small></span>
+    <span class="key scroll" id="k-wheeldn">&#9660;<small>SCROLL</small></span>
+  </div>
+</div>
+<div id="speed-big">0<span class="unit">u/s</span></div>
+<div id="hint">click to play &middot; WASD move &middot; space/wheel jump/bhop &middot; T third person &middot; V noclip &middot; R reset</div>
+<script type="module">
+import * as THREE from "three";
+import { GLTFLoader } from "./lib/GLTFLoader.js";
+import { mergeGeometries } from "./utils/BufferGeometryUtils.js";
+import { MeshBVH, computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from "./lib/three-mesh-bvh.module.js";
+
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+
+const overlay = document.getElementById("overlay");
+const speedBig = document.getElementById("speed-big");
+const params = new URLSearchParams(location.search);
+const TEXTURED = params.get("render") === "textured";
+const ARMS = params.get("arms") === "1";
+const PHYSICS_GLB_URL = "/export/maps/de_dust2/world_physics_physics.glb";
+const glbUrl = TEXTURED
+  ? "/export-textured/maps/de_dust2/world.glb"
+  : params.get("glb") || PHYSICS_GLB_URL;
+const mapName = glbUrl.split("/").pop().replace(/\.glb$/i, "");
+const S = 0.0254; // source units -> meters
+
+function setError(message) {
+  overlay.innerHTML = `<span class="err">error loading ${mapName}\n${message}</span>`;
+}
+
+// ---------------------------------------------------------------------
+// renderer / scene / camera
+// ---------------------------------------------------------------------
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: "high-performance",
+});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0e1116);
+
+if (TEXTURED) {
+  // unlit rendering: no lights, no tone mapping — every surface shows its
+  // texture at native brightness. PBR without CS2's baked lightmaps always
+  // ends up blown out or muddy; fullbright is what actually reads as dust2.
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  scene.background = new THREE.Color(0x87a6c4);
+}
+
+const camera = new THREE.PerspectiveCamera(
+  90,
+  window.innerWidth / window.innerHeight,
+  0.02,
+  10000
+);
+
+const HOLO_FILL = new THREE.MeshBasicMaterial({
+  color: 0x1c2733,
+  wireframe: false,
+  polygonOffset: true,
+  polygonOffsetFactor: 1,
+  polygonOffsetUnits: 1,
+});
+
+const EDGE_MATERIAL = new THREE.LineBasicMaterial({
+  color: 0x3fa9f5,
+  transparent: true,
+  opacity: 0.35,
+});
+
+const EDGE_TRIANGLE_LIMIT = 500000;
+
+// ---------------------------------------------------------------------
+// movement constants (source units, CS2 defaults)
+// ---------------------------------------------------------------------
+
+const GRAVITY = 800;
+const JUMP_VZ = 301.993;
+const GROUND_MAX_SPEED = 250;
+const AIR_MAX_SPEED = 30; // wishspeed cap for air control
+const FRICTION = 5.2;
+const STOP_SPEED = 80;
+const ACCELERATE = 5.5;
+const AIR_ACCELERATE = 12;
+const NOCLIP_SPEED = 500;
+
+const PLAYER_RADIUS = 16;
+const PLAYER_HEIGHT = 72;
+const EYE_HEIGHT = 64;
+
+const TICK_RATE = 64;
+const TICK_DT = 1 / TICK_RATE;
+
+// T spawn, source units -> gltf mapping (x,y,z) -> (y, z, x) [still source units here]
+const SPAWN_SRC = { x: -822, y: -795, z: 150 };
+function srcToGltf(v) {
+  return new THREE.Vector3(v.y, v.z, v.x);
+}
+const SPAWN_GLTF_SRC_UNITS = srcToGltf(SPAWN_SRC); // still in source units, gltf axis order
+
+// player state, all in SOURCE UNITS, gltf axis order (matches scaled collision mesh)
+const player = {
+  pos: SPAWN_GLTF_SRC_UNITS.clone(),
+  vel: new THREE.Vector3(0, 0, 0),
+  grounded: false,
+  noclip: false,
+};
+
+let yaw = 0;
+let pitch = 0;
+
+// mouse sensitivity in CS units (yaw degrees per count = sens * 0.022),
+// so a CS player's number means the same thing here at the same DPI
+let sens = parseFloat(params.get("sens") || localStorage.getItem("cs2lab_sens") || "1.5");
+if (!(sens > 0)) sens = 1.5;
+const sensRad = () => (sens * 0.022 * Math.PI) / 180;
+
+const keys = new Set();
+let pointerLocked = false;
+
+const canvas = renderer.domElement;
+canvas.addEventListener("click", () => {
+  canvas.requestPointerLock();
+});
+document.addEventListener("pointerlockchange", () => {
+  pointerLocked = document.pointerLockElement === canvas;
+});
+const mouseVel = { x: 0, y: 0 };
+document.addEventListener("mousemove", (e) => {
+  if (!pointerLocked) return;
+  yaw -= e.movementX * sensRad();
+  pitch -= e.movementY * sensRad();
+  const limit = Math.PI / 2 - 0.02;
+  pitch = Math.max(-limit, Math.min(limit, pitch));
+  mouseVel.x += e.movementX;
+  mouseVel.y += e.movementY;
+});
+
+window.addEventListener("keydown", (e) => {
+  keys.add(e.code);
+  if (e.code === "BracketLeft" || e.code === "BracketRight") {
+    sens = Math.round(Math.max(0.1, Math.min(10, sens + (e.code === "BracketRight" ? 0.1 : -0.1))) * 100) / 100;
+    localStorage.setItem("cs2lab_sens", String(sens));
+  }
+  if (e.code === "KeyV") {
+    player.noclip = !player.noclip;
+    if (player.noclip) player.vel.set(0, 0, 0);
+  }
+  if (e.code === "KeyR") {
+    player.pos.copy(SPAWN_GLTF_SRC_UNITS);
+    prevTickPos.copy(SPAWN_GLTF_SRC_UNITS);
+    player.vel.set(0, 0, 0);
+    yaw = 0;
+    pitch = 0;
+  }
+});
+window.addEventListener("keyup", (e) => keys.delete(e.code));
+
+// scroll wheel = jump (CS style): each notch buffers a +jump for a short window
+let jumpBufferedAt = -Infinity;
+let wheelUpAt = -Infinity;
+let wheelDnAt = -Infinity;
+window.addEventListener(
+  "wheel",
+  (e) => {
+    if (e.deltaY === 0) return;
+    jumpBufferedAt = performance.now();
+    if (e.deltaY < 0) wheelUpAt = jumpBufferedAt;
+    else wheelDnAt = jumpBufferedAt;
+  },
+  { passive: true }
+);
+
+const inputEls = {
+  w: document.getElementById("k-w"),
+  a: document.getElementById("k-a"),
+  s: document.getElementById("k-s"),
+  d: document.getElementById("k-d"),
+  wheelup: document.getElementById("k-wheelup"),
+  wheeldn: document.getElementById("k-wheeldn"),
+};
+const mouseDot = document.getElementById("mouse-dot");
+function updateInputDisplay(now) {
+  inputEls.w.classList.toggle("on", keys.has("KeyW"));
+  inputEls.a.classList.toggle("on", keys.has("KeyA"));
+  inputEls.s.classList.toggle("on", keys.has("KeyS"));
+  inputEls.d.classList.toggle("on", keys.has("KeyD"));
+  inputEls.wheelup.classList.toggle("on", now - wheelUpAt < 180);
+  inputEls.wheeldn.classList.toggle("on", now - wheelDnAt < 180);
+}
+
+// ---------------------------------------------------------------------
+// load map
+// ---------------------------------------------------------------------
+
+const startTime = performance.now();
+let triangleCount = 0;
+let collisionBvh = null;
+let loaded = false;
+let fps = 0;
+
+// build collision geometry (position-only, world space, meters) from any
+// loaded gltf root, excluding clip brushes / physics-sky. Shared by both
+// wireframe mode (root == visual root) and textured mode (root == the
+// hidden physics-only root).
+function buildCollisionGeoms(root) {
+  const collisionGeoms = [];
+  let count = 0;
+
+  root.traverse((child) => {
+    if (!child.isMesh) return;
+
+    // playerclip MUST collide: Source maps put invisible clip ramps over
+    // stairs, and that's what makes them walkable. Only grenade clips and
+    // the sky shell stay out of the collision mesh.
+    const isExcluded =
+      /grenadeclip/i.test(child.name) || /physics_sky/i.test(child.name);
+    if (isExcluded) return;
+
+    const geometry = child.geometry;
+    const positionCount = geometry.getAttribute("position")?.count || 0;
+    const triCount = geometry.index ? geometry.index.count / 3 : positionCount / 3;
+    count += triCount;
+
+    const cg = geometry.clone().applyMatrix4(child.matrixWorld);
+    const posAttr = cg.getAttribute("position");
+    const stripped = new THREE.BufferGeometry();
+    stripped.setAttribute("position", posAttr);
+    if (cg.index) stripped.setIndex(cg.index);
+    const nonIndexed = stripped.toNonIndexed();
+    const clean = new THREE.BufferGeometry();
+    clean.setAttribute("position", nonIndexed.getAttribute("position"));
+    collisionGeoms.push(clean);
+  });
+
+  return { collisionGeoms, count };
+}
+
+function finalizeCollision(collisionGeoms) {
+  const merged = mergeGeometries(collisionGeoms, false);
+  const k = 1 / S;
+  merged.scale(k, k, k);
+  merged.computeBoundsTree();
+  return merged;
+}
+
+if (TEXTURED) {
+  overlay.textContent = "loading textures...";
+
+  let visualReady = false;
+  let collisionReady = false;
+  function maybeFinishLoad() {
+    if (!visualReady || !collisionReady) return;
+    const loadMs = Math.round(performance.now() - startTime);
+    loaded = true;
+    console.log(`map loaded (textured): ${Math.round(triangleCount)} tris, ${loadMs}ms`);
+  }
+
+  // visual: textured GLB, original materials, added to scene
+  new GLTFLoader().load(
+    glbUrl,
+    (gltf) => {
+      // Source 2 stores wind/blend data in vertex colors; glTF exports it as
+      // COLOR_0 and three.js multiplies it into base color -> purple foliage,
+      // tinted awnings. Strip it everywhere.
+      const unlitCache = new Map();
+      const toUnlit = (m) => {
+        if (!m) return m;
+        if (unlitCache.has(m)) return unlitCache.get(m);
+        // decal overlays (graffiti, posters, bombsite paint) have no alpha
+        // channel — Source blends them with a modulate shader. Multiply
+        // blending approximates it: light backgrounds vanish, art darkens.
+        // match only true surface decals; crate materials are named
+        // "..._painted_decals" and must NOT be caught
+        const isDecal = /^(hr_dust_(overlay|decal)_|dust_mudbrick_transition_overlay|bombsite_)/i.test(m.name || "");
+        const u = new THREE.MeshBasicMaterial({
+          map: m.map || null,
+          color: m.map ? 0xffffff : (m.color || 0xffffff),
+          side: m.side,
+          transparent: isDecal ? true : m.transparent,
+          alphaTest: isDecal ? 0 : m.alphaTest || 0,
+          depthWrite: isDecal ? false : m.depthWrite,
+          blending: isDecal ? THREE.MultiplyBlending : THREE.NormalBlending,
+          polygonOffset: isDecal,
+          polygonOffsetFactor: isDecal ? -4 : 0,
+          polygonOffsetUnits: isDecal ? -4 : 0,
+        });
+        unlitCache.set(m, u);
+        return u;
+      };
+      // tool brushes (blocklight) and additive effect cards (light shafts,
+      // steam, dust motes) can't render correctly unlit -> solid white shards
+      const HIDDEN_MATERIALS = /^tools|^lightshaft|^steam_00|^dust_001/i;
+      gltf.scene.traverse((child) => {
+        if (!child.isMesh) return;
+        const mats = Array.isArray(child.material) ? child.material : [child.material];
+        if (mats.some((m) => m && HIDDEN_MATERIALS.test(m.name || ""))) {
+          child.visible = false;
+          return;
+        }
+        if (child.geometry.getAttribute("color")) child.geometry.deleteAttribute("color");
+        child.material = Array.isArray(child.material)
+          ? child.material.map(toUnlit)
+          : toUnlit(child.material);
+      });
+      scene.add(gltf.scene);
+      gltf.scene.updateMatrixWorld(true);
+      visualReady = true;
+      maybeFinishLoad();
+    },
+    (evt) => {
+      if (evt.lengthComputable) {
+        const pct = Math.round((evt.loaded / evt.total) * 100);
+        overlay.textContent = `loading textures... ${pct}%`;
+      } else {
+        overlay.textContent = `loading textures... ${Math.round(evt.loaded / 1e6)}MB`;
+      }
+    },
+    (err) => {
+      setError(err.message || String(err));
+    }
+  );
+
+  // collision: physics GLB, NOT added to scene, used only for the BVH
+  new GLTFLoader().load(
+    PHYSICS_GLB_URL,
+    (gltf) => {
+      const root = gltf.scene;
+      root.updateMatrixWorld(true);
+      const { collisionGeoms, count } = buildCollisionGeoms(root);
+      triangleCount = count;
+      collisionBvh = finalizeCollision(collisionGeoms);
+      collisionReady = true;
+      maybeFinishLoad();
+    },
+    undefined,
+    (err) => {
+      setError(err.message || String(err));
+    }
+  );
+} else {
+  new GLTFLoader().load(
+    glbUrl,
+    (gltf) => {
+      const root = gltf.scene;
+      scene.add(root);
+      root.updateMatrixWorld(true);
+
+      root.traverse((child) => {
+        if (!child.isMesh) return;
+
+        const isExcluded = /clip/i.test(child.name) || /physics_sky/i.test(child.name);
+        if (isExcluded) {
+          child.visible = false;
+          return;
+        }
+
+        const geometry = child.geometry;
+        const positionCount = geometry.getAttribute("position")?.count || 0;
+        const triCount = geometry.index ? geometry.index.count / 3 : positionCount / 3;
+
+        child.material = HOLO_FILL;
+
+        if (triCount <= EDGE_TRIANGLE_LIMIT) {
+          const edges = new THREE.EdgesGeometry(geometry, 30);
+          const lines = new THREE.LineSegments(edges, EDGE_MATERIAL);
+          child.add(lines);
+        }
+      });
+
+      const { collisionGeoms, count } = buildCollisionGeoms(root);
+      triangleCount = count;
+      collisionBvh = finalizeCollision(collisionGeoms);
+
+      // skybox clip planes trick (copy of index.html logic)
+      scene.updateMatrixWorld(true);
+      const envelope = new THREE.Box3();
+      let biggest = null, biggestVol = 0;
+      const boxes = [];
+      root.traverse((child) => {
+        if (!child.isMesh || !child.visible || child.geometry.type !== "BufferGeometry") return;
+        const box = new THREE.Box3().setFromObject(child);
+        const s = box.getSize(new THREE.Vector3());
+        const vol = s.x * s.y * s.z;
+        boxes.push([child, box, vol]);
+        if (vol > biggestVol) { biggestVol = vol; biggest = child; }
+      });
+      for (const [child, box] of boxes) if (child !== biggest) envelope.union(box);
+
+      if (!envelope.isEmpty()) {
+        envelope.expandByVector(envelope.getSize(new THREE.Vector3()).multiplyScalar(0.03));
+        const planes = [
+          new THREE.Plane(new THREE.Vector3(1, 0, 0), -envelope.min.x),
+          new THREE.Plane(new THREE.Vector3(-1, 0, 0), envelope.max.x),
+          new THREE.Plane(new THREE.Vector3(0, 1, 0), -envelope.min.y),
+          new THREE.Plane(new THREE.Vector3(0, -1, 0), envelope.max.y),
+          new THREE.Plane(new THREE.Vector3(0, 0, 1), -envelope.min.z),
+          new THREE.Plane(new THREE.Vector3(0, 0, -1), envelope.max.z),
+        ];
+        renderer.localClippingEnabled = true;
+        HOLO_FILL.clippingPlanes = planes;
+        EDGE_MATERIAL.clippingPlanes = planes;
+      }
+
+      const loadMs = Math.round(performance.now() - startTime);
+      loaded = true;
+      console.log(`map loaded: ${Math.round(triangleCount)} tris, ${loadMs}ms`);
+    },
+    undefined,
+    (err) => {
+      setError(err.message || String(err));
+    }
+  );
+}
+
+window.addEventListener("resize", () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---------------------------------------------------------------------
+// player model (CS2 SAS, static pose) + third-person toggle (T)
+// ---------------------------------------------------------------------
+
+let playerModel = null;
+let thirdPerson = false;
+
+new GLTFLoader().load("/export/agents/models/ctm_sas/ctm_sas.glb", (gltf) => {
+  playerModel = gltf.scene;
+  playerModel.traverse((child) => {
+    if (!child.isMesh) return;
+    if (!/thirdperson_body/.test(child.name)) {
+      child.visible = false;
+      return;
+    }
+    child.material = new THREE.MeshBasicMaterial({ color: 0x3a6a92 });
+    child.frustumCulled = false;
+  });
+  playerModel.visible = false;
+  scene.add(playerModel);
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "KeyT") thirdPerson = !thirdPerson;
+});
+
+// ---------------------------------------------------------------------
+// first-person arms (experimental, ?arms=1) — bind-pose mannequin arms
+// attached to the camera, cloned from the same CS2 SAS model.
+// ---------------------------------------------------------------------
+
+if (ARMS) {
+  scene.add(camera);
+
+  const armsGroup = new THREE.Group();
+  armsGroup.position.set(0, -1.7, -1.9);
+  armsGroup.rotation.y = Math.PI;
+  camera.add(armsGroup);
+  window.armsGroup = armsGroup;
+
+  new GLTFLoader().load("/export/agents/models/ctm_sas/ctm_sas.glb", (gltf) => {
+    const armsRoot = gltf.scene;
+    armsRoot.traverse((child) => {
+      if (!child.isMesh) return;
+      if (!/firstperson_default_gloves_arms|firstperson_sleeves/.test(child.name)) {
+        child.visible = false;
+        return;
+      }
+      child.material = new THREE.MeshBasicMaterial({ color: 0x3a6a92 });
+      child.frustumCulled = false;
+    });
+    armsGroup.add(armsRoot);
+  });
+}
+
+// ---------------------------------------------------------------------
+// movement simulation (source units), fixed 64Hz tick with accumulator
+// ---------------------------------------------------------------------
+
+const forward = new THREE.Vector3();
+const right = new THREE.Vector3();
+const wishDir = new THREE.Vector3();
+
+function computeWishDir() {
+  // camera-relative, horizontal only (gltf axis order: x,y,z with y up... wait
+  // actually in this scene y is up per the mapping (source z -> gltf y).
+  forward.set(Math.sin(yaw), 0, Math.cos(yaw));
+  right.set(Math.sin(yaw - Math.PI / 2), 0, Math.cos(yaw - Math.PI / 2));
+
+  wishDir.set(0, 0, 0);
+  if (keys.has("KeyW")) wishDir.add(forward);
+  if (keys.has("KeyS")) wishDir.sub(forward);
+  if (keys.has("KeyD")) wishDir.add(right);
+  if (keys.has("KeyA")) wishDir.sub(right);
+  if (wishDir.lengthSq() > 0) wishDir.normalize();
+  return wishDir;
+}
+
+function applyFriction(vel, dt) {
+  const speed = Math.hypot(vel.x, vel.z);
+  if (speed < 0.1) return;
+  const control = Math.max(speed, STOP_SPEED);
+  const drop = control * FRICTION * dt;
+  let newSpeed = speed - drop;
+  if (newSpeed < 0) newSpeed = 0;
+  const scale = newSpeed / speed;
+  vel.x *= scale;
+  vel.z *= scale;
+}
+
+function groundAccelerate(vel, wish, dt) {
+  const wishSpeed = GROUND_MAX_SPEED;
+  const currentSpeed = vel.x * wish.x + vel.z * wish.z;
+  const addSpeed = wishSpeed - currentSpeed;
+  if (addSpeed <= 0) return;
+  let accelSpeed = ACCELERATE * wishSpeed * dt;
+  if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+  vel.x += accelSpeed * wish.x;
+  vel.z += accelSpeed * wish.z;
+}
+
+function airAccelerate(vel, wish, dt) {
+  // wishspeed is capped at 30 for the addspeed budget, but the gain term uses
+  // the UNCAPPED wishspeed (250) — this is what makes Source air strafing work
+  const currentSpeed = vel.x * wish.x + vel.z * wish.z;
+  const addSpeed = AIR_MAX_SPEED - currentSpeed;
+  if (addSpeed <= 0) return;
+  let accelSpeed = AIR_ACCELERATE * GROUND_MAX_SPEED * dt;
+  if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+  vel.x += accelSpeed * wish.x;
+  vel.z += accelSpeed * wish.z;
+}
+
+// capsule collision (three-mesh-bvh characterMovement pattern)
+const capsuleSegment = new THREE.Line3();
+const tempBox = new THREE.Box3();
+const tempVec = new THREE.Vector3();
+const tempVec2 = new THREE.Vector3();
+
+function resolveCollisions() {
+  if (!collisionBvh) return { grounded: false, maxNormalY: 0 };
+
+  let grounded = false;
+  let maxNormalY = 0;
+
+  for (let iter = 0; iter < 4; iter++) {
+    const base = player.pos;
+    // capsule segment: bottom sphere center at base.y + radius, top at base.y + height - radius
+    capsuleSegment.start.set(base.x, base.y + PLAYER_RADIUS, base.z);
+    capsuleSegment.end.set(base.x, base.y + PLAYER_HEIGHT - PLAYER_RADIUS, base.z);
+
+    tempBox.makeEmpty();
+    tempBox.expandByPoint(capsuleSegment.start);
+    tempBox.expandByPoint(capsuleSegment.end);
+    tempBox.min.addScalar(-PLAYER_RADIUS);
+    tempBox.max.addScalar(PLAYER_RADIUS);
+
+    let deltaVector = new THREE.Vector3();
+    let hit = false;
+
+    collisionBvh.boundsTree.shapecast({
+      intersectsBounds: (box) => box.intersectsBox(tempBox),
+      intersectsTriangle: (tri) => {
+        const triPoint = tempVec;
+        const capsulePoint = tempVec2;
+        const distance = tri.closestPointToSegment(capsuleSegment, triPoint, capsulePoint);
+        if (distance < PLAYER_RADIUS) {
+          hit = true;
+          const depth = PLAYER_RADIUS - distance;
+          const direction = capsulePoint.sub(triPoint).normalize();
+          capsuleSegment.start.addScaledVector(direction, depth);
+          capsuleSegment.end.addScaledVector(direction, depth);
+          deltaVector.addScaledVector(direction, depth);
+        }
+      },
+    });
+
+    if (!hit) break;
+
+    const normal = deltaVector.clone();
+    const len = normal.length();
+    if (len > 1e-6) {
+      normal.divideScalar(len);
+      if (normal.y > maxNormalY) maxNormalY = normal.y;
+      if (normal.y > 0.7) grounded = true;
+      const vDotN = player.vel.dot(normal);
+      if (vDotN < 0) player.vel.addScaledVector(normal, -vDotN);
+    }
+
+    // move player position by the resolved capsule base delta
+    const newBase = new THREE.Vector3(
+      capsuleSegment.start.x,
+      capsuleSegment.start.y - PLAYER_RADIUS,
+      capsuleSegment.start.z
+    );
+    player.pos.copy(newBase);
+  }
+
+  return { grounded, maxNormalY };
+}
+
+let wantsJumpQueued = false;
+
+const prevTickPos = SPAWN_GLTF_SRC_UNITS.clone();
+const renderPos = SPAWN_GLTF_SRC_UNITS.clone();
+
+function tick(dt) {
+  prevTickPos.copy(player.pos);
+  const wish = computeWishDir();
+
+  if (player.noclip) {
+    const noclipForward = new THREE.Vector3(
+      Math.sin(yaw) * Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw) * Math.cos(pitch)
+    );
+    const noclipRight = new THREE.Vector3(Math.sin(yaw - Math.PI / 2), 0, Math.cos(yaw - Math.PI / 2));
+    const move = new THREE.Vector3();
+    if (keys.has("KeyW")) move.add(noclipForward);
+    if (keys.has("KeyS")) move.sub(noclipForward);
+    if (keys.has("KeyD")) move.add(noclipRight);
+    if (keys.has("KeyA")) move.sub(noclipRight);
+    if (keys.has("Space")) move.y += 1;
+    if (keys.has("ControlLeft") || keys.has("ControlRight")) move.y -= 1;
+    if (move.lengthSq() > 0) move.normalize().multiplyScalar(NOCLIP_SPEED * dt);
+    player.pos.add(move);
+    player.vel.set(0, 0, 0);
+    player.grounded = false;
+    return;
+  }
+
+  // jump BEFORE friction so autobhop skips ground friction on landing tick
+  const wantsJump =
+    keys.has("Space") || performance.now() - jumpBufferedAt < 150;
+  let jumped = false;
+  if (wantsJump && player.grounded) {
+    player.vel.y = JUMP_VZ;
+    player.grounded = false;
+    jumped = true;
+    jumpBufferedAt = -Infinity;
+  } else if (player.grounded) {
+    applyFriction(player.vel, dt);
+  }
+
+  if (player.grounded) {
+    groundAccelerate(player.vel, wish, dt);
+  } else {
+    airAccelerate(player.vel, wish, dt);
+  }
+  // gravity every tick: keeps the capsule pressed into the floor so the
+  // collision pass reports grounded consistently instead of flickering
+  player.vel.y -= GRAVITY * dt;
+
+  // integrate
+  const preX = player.pos.x;
+  const preZ = player.pos.z;
+  player.pos.addScaledVector(player.vel, dt);
+
+  // resolve collisions
+  const wasGrounded = player.grounded;
+  let { grounded, maxNormalY } = resolveCollisions();
+
+  // ground snap (Source CategorizePosition): if we were on the ground and
+  // didn't jump or get launched, probe down and glue to the surface so
+  // running downhill doesn't turn into a frictionless glide
+  if (!grounded && wasGrounded && !jumped && player.vel.y <= 180) {
+    const savedPos = player.pos.clone();
+    player.pos.y -= 4;
+    const snap = resolveCollisions();
+    if (snap.grounded) {
+      grounded = true;
+    } else {
+      player.pos.copy(savedPos);
+    }
+  }
+
+  player.grounded = grounded;
+  if (grounded && player.vel.y < 0) player.vel.y = 0;
+
+  // stationary pin: CS2 has a flat-bottom box hull, so feet on ANY solid
+  // ground (even a pixel-wide ledge corner) means zero momentum. Our capsule
+  // bottom would otherwise creep sideways off corners and jitter 0<->0.1 on
+  // triangle seams. With no input, not jumping, and any ground-ish contact,
+  // pin horizontal position and velocity outright.
+  if (
+    wish.lengthSq() === 0 &&
+    !jumped &&
+    player.vel.y <= 0 &&
+    (grounded || maxNormalY > 0.15)
+  ) {
+    const hs = Math.hypot(player.vel.x, player.vel.z);
+    if (hs < 20) {
+      player.pos.x = preX;
+      player.pos.z = preZ;
+      player.vel.x = 0;
+      player.vel.z = 0;
+      player.grounded = true;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// main loop
+// ---------------------------------------------------------------------
+
+let accumulator = 0;
+let lastTime = performance.now();
+let frameCount = 0;
+let fpsAccum = 0;
+let fpsTimer = performance.now();
+
+renderer.setAnimationLoop(() => {
+  const now = performance.now();
+  let frameDt = (now - lastTime) / 1000;
+  lastTime = now;
+  if (frameDt > 0.25) frameDt = 0.25; // clamp huge stalls (tab switch etc.)
+
+  if (loaded) {
+    accumulator += frameDt;
+    let ticks = 0;
+    while (accumulator >= TICK_DT && ticks < 8) {
+      tick(TICK_DT);
+      accumulator -= TICK_DT;
+      ticks++;
+    }
+  }
+
+  // interpolate between the last two 64Hz sim states so the camera moves
+  // every rendered frame instead of snapping at tick rate (stutter fix)
+  const alpha = Math.min(accumulator / TICK_DT, 1);
+  renderPos.copy(prevTickPos).lerp(player.pos, alpha);
+
+  // camera: renderPos is capsule base in source units, eye at EYE_HEIGHT up
+  const eyeSrc = tempVec.set(renderPos.x, renderPos.y + EYE_HEIGHT, renderPos.z);
+  camera.position.set(eyeSrc.x * S, eyeSrc.y * S, eyeSrc.z * S);
+
+  const lookDir = new THREE.Vector3(
+    Math.sin(yaw) * Math.cos(pitch),
+    Math.sin(pitch),
+    Math.cos(yaw) * Math.cos(pitch)
+  );
+
+  if (playerModel) {
+    playerModel.visible = thirdPerson;
+    playerModel.position.set(renderPos.x * S, renderPos.y * S, renderPos.z * S);
+    playerModel.rotation.y = yaw;
+  }
+  if (thirdPerson) {
+    camera.position.addScaledVector(lookDir, -130 * S);
+    camera.position.y += 10 * S;
+  }
+
+  camera.lookAt(
+    camera.position.x + lookDir.x,
+    camera.position.y + lookDir.y,
+    camera.position.z + lookDir.z
+  );
+
+  renderer.render(scene, camera);
+
+  // fps
+  frameCount++;
+  fpsAccum++;
+  if (now - fpsTimer > 500) {
+    fps = Math.round((fpsAccum * 1000) / (now - fpsTimer));
+    fpsAccum = 0;
+    fpsTimer = now;
+  }
+
+  // mouse joystick indicator
+  mouseVel.x *= 0.82;
+  mouseVel.y *= 0.82;
+  const padRadius = 24; // pad radius (34.5px) minus dot radius (10px, roundish margin)
+  const dotX = Math.max(-padRadius, Math.min(padRadius, mouseVel.x * 0.35));
+  const dotY = Math.max(-padRadius, Math.min(padRadius, mouseVel.y * 0.35));
+  mouseDot.style.transform = `translate(${dotX.toFixed(1)}px, ${dotY.toFixed(1)}px)`;
+  mouseDot.classList.toggle("on", Math.hypot(dotX, dotY) > 2);
+
+  // HUD
+  updateInputDisplay(now);
+  const horizSpeed = Math.hypot(player.vel.x, player.vel.z);
+  speedBig.innerHTML = `${horizSpeed.toFixed(1)}<span class="unit">u/s</span>`;
+
+  const posM = camera.position;
+  const lines = [
+    `map: ${mapName}`,
+    loaded
+      ? `triangles: ${Math.round(triangleCount).toLocaleString()}`
+      : TEXTURED
+      ? "loading textures..."
+      : "loading...",
+    `speed: ${horizSpeed.toFixed(1)} u/s`,
+    `pos: ${posM.x.toFixed(2)}, ${posM.y.toFixed(2)}, ${posM.z.toFixed(2)}`,
+    `fps: ${fps}`,
+    `sens: ${sens.toFixed(2)}  ([ / ] to adjust)`,
+    `noclip: ${player.noclip ? "ON" : "off"}`,
+    `pointer lock: ${pointerLocked ? "yes" : "no (click canvas)"}`,
+  ];
+  overlay.textContent = lines.join("\n");
+});
+</script>
+</body>
+</html>
