@@ -1,6 +1,0 @@
-# exported game assets (Valve IP, export locally from your own install)
-export/
-export-textured/
-# VRF CLI binaries (download from ValveResourceFormat releases)
-tools/
-.server.pid
